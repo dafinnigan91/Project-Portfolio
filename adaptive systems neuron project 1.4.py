@@ -1,0 +1,339 @@
+import matplotlib.pyplot as plt
+import numpy as np
+import random
+import pandas as pd 
+import sys
+import json
+
+P_r = float(sys.argv[1]) if len(sys.argv) > 1 else 0.8
+
+#Physical perameters
+R = 8.314  # Universal gas constant (J/(mol·K))
+T = 310.15  # Temperature in Kelvin (37°C)
+F = 96485  # Faraday's constant (C/mol)
+
+# Permeabilities (Relative permeability of ions)
+P_K = 1.0  # Relative permeability of K+
+P_Na = 0.04  # Relative permeability of Na+
+P_Cl = 0.45  # Relative permeability of Cl-
+P_Ca = 0.001  # Relative permeability of Ca+2
+
+AMPAR_history = []
+NMDAR_history = []
+Mem_Vlotage_History = []
+Ca_history = []
+Na_in_History = []
+Na_out_History = []
+K_in_History = []
+K_out_History = []
+Cl_in_History = []
+Cl_out_History = []
+Ca_in_History = []
+Ca_out_History = []
+
+# Ion concentrations (mM) 
+K_out = 5.0   # Extracellular K+
+K_in = 127.0  # Intracellular K+
+
+Na_out = 145.0  # Extracellular Na+
+Na_in = 15.0    # Intracellular Na+
+
+Cl_out = 110.0  # Extracellular Cl-
+Cl_in = 4.0     # Intracellular Cl-
+
+Ca_out = 0.1  # Extracellular Ca+2
+Ca_in = 0.0001     # Intracellular Ca+2
+Em0 = (R * T / F) * np.log(
+    ((P_K * K_out) + (P_Na * Na_out) + (P_Cl * Cl_in) + (P_Ca * Ca_out)) /
+    ((P_K * K_in)  + (P_Na * Na_in)  + (P_Cl * Cl_out) + (P_Ca * Ca_in))
+)
+print(f"Initial Em: {Em0 * 1000:.2f} mV")
+#equilibrium values
+Na_in_eq = 15.0 # equilibrium values for Na
+Na_out_eq = 145.0 # equilibrium values for Na
+
+K_in_eq = 140.0 # equilibrium values for K
+K_out_eq = 5.0 # equilibrium values for K
+
+Cl_in_eq = 4.0 # equilibrium values for Cl
+Cl_out_eq = 110.0 # equilibrium values for cl
+
+Ca_in_eq = 0.001 # equilibrium values for Na
+Ca_out_eq = 100.0 # equilibrium values for Na
+
+Na_Chanel = False
+K_Chanel = False
+
+# --- Setup ---
+Spike_train = np.zeros(9999, dtype=int) #MAIN LEVERAGE POINT FOR DYNAMICS
+Spike_train[500:1000:25] = 1 #MAIN LEVERAGE POINT FOR DYNAMICS
+Spike_train[2000:2500:25] = 1 #MAIN LEVERAGE POINT FOR DYNAMICS
+Spike_train[3500:4000:25] = 1 #MAIN LEVERAGE POINT FOR DYNAMICS
+Spike_train[random.randint(3500,6000)] = 1
+spike_times = [i for i, x in enumerate(Spike_train) if x == 1]
+Spike_History = []
+
+#Vesical veariables 
+GLu_mol_Vescl = 3000 #Glutamate per vesical 
+Vescl_doc = 2 #maximum docking cap of pre synaptic membrain
+'''Vescl_R_prob = 0.80 #MAIN LEVERAGE POINT FOR DYNAMICS'''
+Vescl_R_prob = P_r
+cleft_GLu_vol = 0 # initial level of glutamate in the cleft 
+V_replen_time = None #time it takes for vesical to replenish 
+
+#AMPAR variables
+AMPAR_initial = 500 # level of AMPA receptors in post synaptic membrain
+AMPAR = AMPAR_initial #initial level of AMPA receptors in post synaptic membrain
+AMPAR_avalible = AMPAR #level of AMPA receptors in post synaptic membrain that are avalible for GlU to bind 
+AMPAR_bound = [] #list of bound AMPARS
+bound_A = 0 #number of AMPARs bound 
+AMPAR_insert = random.randrange(200, 300)
+
+#NMDAR variables 
+NMDAR = 50
+NMDAR_Mg = True
+NMDAR_bound = []
+bound_N = 0
+
+Ca_th_coef = 0.8
+Ca_threshold = NMDAR * Ca_th_coef #MAIN LEVERAGE POINT FOR DYNAMICS
+
+Syn_Deprs_count = 0
+
+# --- Simulation Loop ---
+for t, S in enumerate(Spike_train):
+    Spike_History.append(S)
+    # Spike triggers glutamate release
+    if S == 1 and t > 0 and Spike_train[t - 1] == 0 and Vescl_doc > 0:
+        for vesical in range(Vescl_doc):
+            if random.random() <= Vescl_R_prob:
+                cleft_GLu_vol += GLu_mol_Vescl
+                #K_in =+ 5
+        Vescl_doc -= 1
+        V_replen_time = t
+
+    if V_replen_time is not None and t - V_replen_time >= random.randint(1,5): #MAIN LEVERAGE POINT FOR DYNAMICS
+        Vescl_doc = 1
+        V_replen_time = None
+
+    # AMPAR binding
+    if S == 1 and cleft_GLu_vol > 0 and AMPAR_avalible > 0:
+        bind_P = min(0.3, AMPAR_avalible / AMPAR)
+        scale_fac = (AMPAR / 30)
+        max_binding_events = 50  # limit number of binding attempts per timestep
+        binding_attempts = 0
+        while cleft_GLu_vol > 0 and AMPAR_avalible > 0 and binding_attempts < max_binding_events:
+            if random.random() < bind_P:
+                AMPAR_bound.append((t, AMPAR_avalible))  # record binding event
+                bound_A += 1
+                cleft_GLu_vol -= 1
+                AMPAR_avalible -= 1
+                Na_in += 2.0 * scale_fac
+                Na_out -= 2.0 * scale_fac
+                K_out += 0.05 * scale_fac
+                K_in -= 0.05 * scale_fac
+                Cl_out -= 0.05 * scale_fac
+                Cl_in  += 0.05 * scale_fac
+            binding_attempts += 1
+            if cleft_GLu_vol <= 0 or AMPAR_avalible <= 0:
+                break 
+        Vol_AMPAR_bound = len(AMPAR_bound)
+        NMDAR_avalible = NMDAR
+        if Vol_AMPAR_bound >= Ca_threshold:
+            NMDAR_Mg = False
+        if NMDAR_Mg == False and bound_N > 0:
+            effective_P_Ca = P_Ca  # Allow Ca²⁺ through NMDARs
+        else:
+            effective_P_Ca = 0
+        if NMDAR_Mg == False:
+            attempts = 0
+            max_attempts = 50
+            while bound_N < NMDAR and cleft_GLu_vol > 0:
+                bind_P_NMDAR = NMDAR_avalible / NMDAR
+                for Gl, NMDAR_RE in zip(range(1, int(cleft_GLu_vol) + 1), range(1, NMDAR_avalible + 1)):
+                    if random.random() < bind_P_NMDAR:
+                        NMDAR_bound.append((Gl, NMDAR_RE))
+                        bound_N += 1
+                        cleft_GLu_vol -= 1
+                        NMDAR_avalible -= 1
+                        Na_in +=  1.0
+                        Na_out -=  1.0
+                    bind_P_NMDAR = NMDAR_avalible / NMDAR
+                if cleft_GLu_vol <= 0 or NMDAR_avalible <= 0:
+                    break
+                attempts += 1
+        Vol_NMDAR_bound = len(NMDAR_bound)
+        Ca_in += Vol_NMDAR_bound
+        Ca_out -= Vol_NMDAR_bound# Ca influx from NMDARs
+            
+    depression_threshold = Ca_threshold * 0.2
+    depression_duration = random.randint(500,1000) # ms of low calcium required to trigger depression
+
+    # Track how long Ca²⁺ has been low
+    if Ca_in < depression_threshold:    
+        Syn_Deprs_count += 1
+    else:
+        Syn_Deprs_count = 0  # reset if Ca spikes up again
+
+    # If calcium stays low long enough, remove AMPARs
+    if Syn_Deprs_count >= depression_duration and AMPAR > AMPAR_initial:
+        AMPAR_ran_rem = random.randrange(200,300)
+        AMPAR -= AMPAR_ran_rem 
+        AMPAR_avalible = max(AMPAR_avalible - AMPAR_ran_rem , AMPAR_initial)
+        Syn_Deprs_count = 0  
+    
+    # Plasticity rule: AMPAR insertion if Ca is high
+    if Ca_in > Ca_threshold:
+        delta_AMPAR = int((Ca_in - Ca_threshold) * 4)
+        AMPAR += delta_AMPAR
+        AMPAR_avalible += delta_AMPAR
+        
+    #Remove AMPAR if volum exceeds
+    while AMPAR >= AMPAR_initial * 50: #MAIN LEVERAGE POINT FOR DYNAMICS ...................................................................................................................................
+        AMPAR -= random.randrange(5,50)
+
+    #Ion Pumps to stabelize membrain potential 
+    Na_pump_strength = (Na_in - Na_in_eq) * 0.05  # 
+    K_pump_strength = (K_out - K_in_eq) * 0.05  
+    Na_out += Na_pump_strength * 10
+    Na_in  -= Na_pump_strength * 10
+    K_out  += K_pump_strength * 3
+    K_in   -= K_pump_strength * 3
+    
+    # Passive ion deay
+    K_decay = 0.8
+    Cl_decay = 0.9
+    Ca_decay = 0.9
+    K_in -= K_in * (1 - K_decay)
+    K_out += K_in * (1 - K_decay)
+    Cl_in -= Cl_in * (1 - Cl_decay)
+    Cl_out += Cl_in * (1 - Cl_decay)
+    Ca_in -= Ca_in * (1 - Ca_decay)
+    Ca_out += Ca_in * (1 - Ca_decay)
+
+    if t > 0 and Spike_train[t - 1] == 1 and Spike_train[t] == 0:
+    #Boost K+ outflow to return toward resting potential
+        K_in -= 5.0
+        K_out += 5.0
+
+    #Close channels if no stim
+    if Spike_train[t] == 0:
+        Na_Chanel = False
+        K_Chanel = False
+
+    #Stabilizing K+ leak toward resting potential ---
+    K_in -= 0.01
+    K_out += 0.01
+    
+    #Glutamate cleared by transporters (at every time step, this is unrealistic)
+    cleft_GLu_vol *= 0.9
+    
+    #Clamp to minimums to avoid log erors
+    Na_in = min(max(Na_in, 0.01), 10000)
+    Na_out = min(max(Na_out, 0.001), 50)
+    K_in = min(max(K_in, 0.01), 15)
+    K_out = min(max(K_out, 0.01), 2)
+    Cl_in = min(max(Cl_in, 5), 50)
+    Cl_out = min(max(Cl_out, 0.27), 95)
+    Ca_in = min(max(Ca_in, 0.0001), 0.1)
+    Ca_out = min(max(Ca_out, 0.01), 25)
+    AMPAR = max(AMPAR, AMPAR_initial)
+    
+    # membrain potentail is the Goldman Hodgkin Katz constant feild equasion
+    Mem_Vlotage = (R * T / F) * np.log(
+                    ((P_K * K_out) + (P_Na * Na_out) + (P_Cl * Cl_in) + (P_Ca * Ca_out)) /
+                    ((P_K * K_in) + (P_Na * Na_in) + (P_Cl * Cl_out) + (P_Ca * Ca_in)))
+    Mem_Vlotage_History.append(Mem_Vlotage*1000)
+    
+    #Track ion volumes inside and out of the synaps at every step
+    Na_in_History.append(Na_in)
+    Na_out_History.append(Na_out)
+    K_in_History.append(K_in)
+    K_out_History.append(K_out)
+    Cl_in_History.append(Cl_in)
+    Cl_out_History.append(Cl_out)
+    Ca_in_History.append(Ca_in)
+    Ca_out_History.append(Ca_out)
+    
+    #Track AMPAR every timestep
+    AMPAR_history.append(AMPAR)
+print(f"t={t} | Na_in={Na_in:.2f}, Na_out={Na_out:.2f}, K_in={K_in:.2f}, K_out={K_out:.2f}, Cl_in={K_in:.2f}, Cl_out={K_out:.2f}, Ca_in={K_in:.2f}, Ca_out={K_out:.2f}, Vm={Mem_Vlotage:.4f}")  
+
+##############################################################################################################################################################################################
+
+np.save(f"AMPAR_history_{P_r:.2f}.npy", AMPAR_history)
+
+
+data = {'Time (ms)': np.arange(len(Mem_Vlotage_History)),
+        'spikes 0 - 1':Spike_History,
+        'Membrane Voltage (V)': Mem_Vlotage_History,
+        'AMPARs': AMPAR_history,
+        'Na+ In': Na_in_History,
+        'Na+ Out': Na_out_History,
+        'K+ In': K_in_History,
+        'K+ Out': K_out_History,
+        'Cl- In': Cl_in_History,
+        'Cl- Out': Cl_out_History,
+        'Ca2+ In': Ca_in_History,
+        'Ca2+ Out': Ca_out_History,}
+df = pd.DataFrame(data)
+df.to_excel(r"C:\Users\david\OneDrive\Documents\synapse_simulation_output.xlsx", index=False)
+
+
+
+fig, (ax1, ax2, ax3) = plt.subplots(nrows=3, figsize=(10, 6), sharex=True)
+
+# --- Plot spike train ---
+ax1.vlines(spike_times, 1, 2)
+ax1.set_ylabel('Spikes')
+ax1.set_title('Neuronal Spike Train')
+
+# --- Plot AMPAR over time ---
+ax2.plot(range(len(AMPAR_history)), AMPAR_history, linewidth=1)
+ax2.set_xlim([0, len(Spike_train)])
+ax2.set_xlabel('Time (ms)')
+ax2.set_ylabel('AMPARs')
+ax2.set_title('AMPAR Volume over Time')
+ax2.grid(True)
+
+ax3.plot(range(len(Mem_Vlotage_History)), Mem_Vlotage_History, linewidth=1)
+ax3.set_xlabel('Time (ms)')
+ax3.set_ylabel('Em (mV)')
+ax3.set_title('Dynamic Membrane Potential (Goldman Equation)')
+ax3.grid(True)
+
+plt.tight_layout()
+plt.show(block=False)
+
+fig, (ax4, ax5, ax6, ax7) = plt.subplots(nrows=4, figsize=(10, 6), sharex=True)
+
+ax4.plot(Na_in_History, label='Na+ in', color='red', linewidth=1)
+ax4.plot(Na_out_History, label='Na+ out', color='blue', linewidth=1)
+ax4.set_ylabel('[Na⁺] (mM)')
+ax4.set_title('Sodium Concentrations')
+ax4.legend()
+ax4.grid(True)
+
+ax5.plot(K_in_History, label='K+ in', color='red', linewidth=1)
+ax5.plot(K_out_History, label='K+ out', color='blue', linewidth=1)
+ax5.set_ylabel('[K+] (mM)')
+ax5.set_title('Potassium Concentrations')
+ax5.legend()
+ax5.grid(True)
+
+ax6.plot(Cl_in_History, label='Cl- in', color='red', linewidth=1)
+ax6.plot(Cl_out_History, label='Cl- out', color='blue', linewidth=1)
+ax6.set_ylabel('[Cl-] (mM)')
+ax6.set_title('Chloride Concentrations')
+ax6.legend()
+ax6.grid(True)
+
+ax7.plot(Ca_in_History, label='Ca2+ in', color='red', linewidth=1)
+ax7.plot(Ca_out_History, label='Ca2+ out', color='blue', linewidth=1)
+ax7.set_ylabel('[Ca2+] (mM)')
+ax7.set_title('Calcium Concentrations')
+ax7.legend()
+ax7.grid(True)
+
+plt.tight_layout()
+plt.show()
